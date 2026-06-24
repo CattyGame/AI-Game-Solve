@@ -1,0 +1,14 @@
+{
+  "easy": {
+    "board": [1, 2, 3, 4, 0, 5, 7, 8, 6],
+    "description": "Easy puzzle needing only 1 move to solve."
+  },
+  "medium": {
+    "board": [1, 3, 5, 4, 2, 6, 7, 8, 0],
+    "description": "Medium difficulty puzzle."
+  },
+  "hard": {
+    "board": [8, 6, 7, 2, 5, 4, 3, 0, 1],
+    "description": "Hard puzzle requiring many moves."
+  }
+}

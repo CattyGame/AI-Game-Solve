@@ -1,0 +1,14 @@
+{
+  "easy": {
+    "n": 4,
+    "description": "4-Queens problem on a 4x4 board."
+  },
+  "medium": {
+    "n": 8,
+    "description": "8-Queens problem on a standard 8x8 board."
+  },
+  "hard": {
+    "n": 12,
+    "description": "12-Queens problem on a 12x12 board."
+  }
+}
