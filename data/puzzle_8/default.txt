@@ -1,0 +1,5 @@
+# Trạng thái mặc định để chạy thử main.py
+# Giải được trong 3 bước
+1 2 3
+0 4 6
+7 5 8
