@@ -1,46 +1,37 @@
 """
 solver.py  –  MODULE 1: BỘ GIẢI SUDOKU
 ============================================================
-Hiện thực Backtracking (Duyệt lui) kết hợp các kỹ thuật CSP tối ưu:
-  • MRV  (Minimum Remaining Values)  – chọn ô có ít giá trị hợp lệ nhất
-  • Degree Heuristic                 – tiebreak: ô ràng buộc nhiều ô trống nhất
-  • Forward Checking                 – sau mỗi gán giá trị, cập nhật domain
-                                       của các ô liên quan và phát hiện sớm
-                                       dead-end (domain rỗng).
 
-Giao diện công khai
--------------------
+Hiện thực Backtracking kết hợp các kỹ thuật CSP:
+  • MRV  (Minimum Remaining Values)
+  • Degree Heuristic (tiebreak)
+  • Forward Checking
+
+Giao diện công khai 
+-------------------------------------------------
   SudokuSolver(use_mrv, use_degree, use_fc)
-      .solve(board)  ->  list[list[int]] | None
-      .is_valid_solution(board)  ->  bool
-      .get_stats()   ->  dict
+      .solve(initial_state)  ->  list[list[int]] | None
+      .get_metrics()         ->  dict
+      .reset_metrics()
 
 Board format: list[list[int]], 9×9, giá trị 0 = ô trống.
 """
 
 import copy
-import time
+import tracemalloc
 from typing import Optional
 
-import sys
-import os
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..'))
-from core.base_solver import BaseSolver
+from src.core.base_solver import BaseSolver
 
 # ──────────────────────────────────────────────────────────
-# Hằng số
-# ──────────────────────────────────────────────────────────
-SIZE   = 9          # kích thước bảng
-BOX    = 3          # kích thước ô vuông con
+SIZE   = 9
+BOX    = 3
 DIGITS = set(range(1, 10))
 
 
-# ══════════════════════════════════════════════════════════
-# Lớp chính
-# ══════════════════════════════════════════════════════════
 class SudokuSolver(BaseSolver):
     """
-    Bộ giải Sudoku với Backtracking + CSP Heuristics.
+    Bộ giải Sudoku: Backtracking + MRV + Degree Heuristic + Forward Checking.
 
     Parameters
     ----------
@@ -59,58 +50,61 @@ class SudokuSolver(BaseSolver):
         self.use_mrv    = use_mrv
         self.use_degree = use_degree
         self.use_fc     = use_fc
-        self.time_taken: float = 0.0
 
     # ──────────────────────────────────────────────────────
-    # Giao diện công khai
+    # Giao diện bắt buộc (override từ BaseSolver)
     # ──────────────────────────────────────────────────────
-    def solve(self, board: list[list[int]]) -> Optional[list[list[int]]]:
+    def solve(self, initial_state: list[list[int]]) -> Optional[list[list[int]]]:
         """
-        Giải Sudoku.
+        Giải Sudoku từ trạng thái ban đầu.
 
         Parameters
         ----------
-        board : 9×9 list[list[int]], ô trống = 0
+        initial_state : 9×9 list[list[int]], ô trống = 0
 
         Returns
         -------
-        Bảng đã giải (9×9 list[list[int]]) hoặc None nếu vô nghiệm.
+        Ma trận đã điền đầy đủ hoặc None nếu vô nghiệm.
         """
-        self.reset()
+        self.reset_metrics()
 
-        # Sao chép để không làm thay đổi input gốc
-        grid = [row[:] for row in board]
+        grid = [row[:] for row in initial_state]
 
-        # Khởi tạo domain cho từng ô
         domains = self._init_domains(grid)
         if domains is None:
-            return None          # board đầu vào mâu thuẫn ngay
+            return None
 
-        start = time.perf_counter()
+        # Đo thời gian và bộ nhớ theo chuẩn BaseSolver
+        tracemalloc.start()
+        start = self._start_timer()
+
         result = self._backtrack(grid, domains)
-        self.time_taken = time.perf_counter() - start
+
+        self._stop_timer(start)
+        _, peak = tracemalloc.get_traced_memory()
+        tracemalloc.stop()
+        self.memory_used = peak / (1024 * 1024)   # bytes → MB
 
         if result:
-            self.solved   = True
-            self.solution = result
+            self.solution_length = sum(
+                1 for r in range(SIZE) for c in range(SIZE)
+                if initial_state[r][c] == 0
+            )
             return copy.deepcopy(result)
         return None
 
+    # ──────────────────────────────────────────────────────
+    # Kiểm tra lời giải hợp lệ (tiện ích)
+    # ──────────────────────────────────────────────────────
     def is_valid_solution(self, board: list[list[int]]) -> bool:
         """Kiểm tra bảng đã điền đầy đủ và hợp lệ."""
         if not board or len(board) != SIZE:
             return False
         for i in range(SIZE):
-            if len(board[i]) != SIZE:
-                return False
-            # Kiểm tra hàng
             if set(board[i]) != DIGITS:
                 return False
-            # Kiểm tra cột
-            col = {board[r][i] for r in range(SIZE)}
-            if col != DIGITS:
+            if {board[r][i] for r in range(SIZE)} != DIGITS:
                 return False
-        # Kiểm tra 9 ô vuông con 3×3
         for br in range(BOX):
             for bc in range(BOX):
                 box_vals = {
@@ -121,28 +115,23 @@ class SudokuSolver(BaseSolver):
                     return False
         return True
 
-    def get_stats(self) -> dict:
-        base = super().get_stats()
-        base.update({
-            "time_seconds": round(self.time_taken, 6),
-            "use_mrv":      self.use_mrv,
-            "use_degree":   self.use_degree,
-            "use_fc":       self.use_fc,
-        })
-        return base
-
     # ──────────────────────────────────────────────────────
     # Khởi tạo domain
     # ──────────────────────────────────────────────────────
     def _init_domains(
         self, grid: list[list[int]]
-    ) -> Optional[dict[tuple, set[int]]]:
-        """
-        Xây dựng domains[ô] = tập giá trị hợp lệ cho ô đó.
-        Ô đã điền sẵn có domain = {giá trị}.
-        Trả về None nếu phát hiện mâu thuẫn ngay từ đầu.
-        """
-        domains: dict[tuple, set[int]] = {}
+    ) -> Optional[dict]:
+        # Kiểm tra các ô đã điền sẵn có mâu thuẫn với nhau không
+        for r in range(SIZE):
+            for c in range(SIZE):
+                v = grid[r][c]
+                if v == 0:
+                    continue
+                for pr, pc in self._get_peers(r, c):
+                    if grid[pr][pc] == v:
+                        return None   # 2 ô liền kề cùng giá trị → vô nghiệm
+
+        domains = {}
         for r in range(SIZE):
             for c in range(SIZE):
                 if grid[r][c] != 0:
@@ -151,7 +140,7 @@ class SudokuSolver(BaseSolver):
                     used = self._get_used_values(grid, r, c)
                     remaining = DIGITS - used
                     if not remaining:
-                        return None   # mâu thuẫn
+                        return None
                     domains[(r, c)] = remaining
         return domains
 
@@ -161,26 +150,20 @@ class SudokuSolver(BaseSolver):
     def _backtrack(
         self,
         grid: list[list[int]],
-        domains: dict[tuple, set[int]],
+        domains: dict,
     ) -> Optional[list[list[int]]]:
-        """Đệ quy Backtracking. Trả về bảng giải hoặc None."""
-
-        # Tìm ô trống tiếp theo cần điền
         cell = self._select_unassigned(grid, domains)
         if cell is None:
-            # Không còn ô trống → đã giải xong
             return grid
 
         r, c = cell
-        for value in sorted(domains[(r, c)]):   # thứ tự tăng dần để tái hiện được
+        for value in sorted(domains[(r, c)]):
             self.nodes_explored += 1
 
             if self._is_consistent(grid, r, c, value):
-                # Gán thử
                 grid[r][c] = value
 
                 if self.use_fc:
-                    # Forward Checking: cập nhật domains & phát hiện dead-end
                     new_domains, ok = self._forward_check(domains, r, c, value)
                     if ok:
                         result = self._backtrack(grid, new_domains)
@@ -191,79 +174,45 @@ class SudokuSolver(BaseSolver):
                     if result:
                         return result
 
-                # Backtrack
                 grid[r][c] = 0
 
-        return None   # không tìm được giá trị nào phù hợp
+        return None
 
     # ──────────────────────────────────────────────────────
-    # Chọn biến (Variable Selection)
+    # Chọn biến – MRV + Degree Heuristic
     # ──────────────────────────────────────────────────────
-    def _select_unassigned(
-        self,
-        grid: list[list[int]],
-        domains: dict[tuple, set[int]],
-    ) -> Optional[tuple[int, int]]:
-        """
-        Chọn ô trống tiếp theo:
-          • Nếu use_mrv=False  : lấy ô trống đầu tiên (left-to-right, top-to-bottom)
-          • Nếu use_mrv=True   : MRV – ô có ít giá trị khả thi nhất
-          • Nếu use_degree=True: tiebreak bằng Degree Heuristic
-        """
-        empty_cells = [
+    def _select_unassigned(self, grid, domains):
+        empty = [
             (r, c)
             for r in range(SIZE) for c in range(SIZE)
             if grid[r][c] == 0
         ]
-        if not empty_cells:
+        if not empty:
             return None
-
         if not self.use_mrv:
-            return empty_cells[0]
+            return empty[0]
 
-        # MRV
-        def mrv_key(cell):
+        def key(cell):
             r, c = cell
-            domain_size  = len(domains[(r, c)])
-            degree_break = 0
-            if self.use_degree:
-                # Degree: số ô trống mà ô này ràng buộc (càng nhiều càng ưu tiên)
-                # → dùng âm để sort tăng dần vẫn chọn đúng
-                degree_break = -self._count_empty_peers(grid, r, c)
-            return (domain_size, degree_break)
+            d = len(domains[(r, c)])
+            deg = -self._count_empty_peers(grid, r, c) if self.use_degree else 0
+            return (d, deg)
 
-        return min(empty_cells, key=mrv_key)
+        return min(empty, key=key)
 
-    def _count_empty_peers(
-        self, grid: list[list[int]], row: int, col: int
-    ) -> int:
-        """Đếm số ô trống trong cùng hàng, cột, và box với (row, col)."""
-        count = 0
-        peers = self._get_peers(row, col)
-        for r, c in peers:
-            if grid[r][c] == 0:
-                count += 1
-        return count
+    def _count_empty_peers(self, grid, row, col):
+        return sum(1 for r, c in self._get_peers(row, col) if grid[r][c] == 0)
 
     # ──────────────────────────────────────────────────────
-    # Kiểm tra ràng buộc (Constraint Check)
+    # Kiểm tra ràng buộc
     # ──────────────────────────────────────────────────────
-    def _is_consistent(
-        self, grid: list[list[int]], row: int, col: int, value: int
-    ) -> bool:
-        """Trả về True nếu gán value vào (row, col) không vi phạm ràng buộc."""
+    def _is_consistent(self, grid, row, col, value):
         return value not in self._get_used_values(grid, row, col)
 
-    def _get_used_values(
-        self, grid: list[list[int]], row: int, col: int
-    ) -> set[int]:
-        """Tập giá trị đã xuất hiện trong cùng hàng, cột, box với (row, col)."""
-        used: set[int] = set()
-        # Hàng
+    def _get_used_values(self, grid, row, col):
+        used = set()
         used.update(v for v in grid[row] if v != 0)
-        # Cột
         used.update(grid[r][col] for r in range(SIZE) if grid[r][col] != 0)
-        # Box 3×3
         br, bc = (row // BOX) * BOX, (col // BOX) * BOX
         used.update(
             grid[br + dr][bc + dc]
@@ -275,48 +224,24 @@ class SudokuSolver(BaseSolver):
     # ──────────────────────────────────────────────────────
     # Forward Checking
     # ──────────────────────────────────────────────────────
-    def _forward_check(
-        self,
-        domains: dict[tuple, set[int]],
-        row: int,
-        col: int,
-        value: int,
-    ) -> tuple[dict[tuple, set[int]], bool]:
-        """
-        Sau khi gán value vào (row, col):
-          1. Tạo bản sao domains mới (tránh ảnh hưởng khi backtrack).
-          2. Loại value khỏi domain của các ô liên quan (peers).
-          3. Nếu domain nào đó rỗng → trả về (_, False) (dead-end).
-
-        Returns
-        -------
-        (new_domains, ok)
-        """
-        # Shallow copy dict, deep copy mỗi set
+    def _forward_check(self, domains, row, col, value):
         new_domains = {k: set(v) for k, v in domains.items()}
-        # Ô đã gán thì domain = {value}
         new_domains[(row, col)] = {value}
-
         for r, c in self._get_peers(row, col):
             if (r, c) in new_domains:
                 new_domains[(r, c)].discard(value)
                 if not new_domains[(r, c)]:
-                    return new_domains, False   # dead-end
-
+                    return new_domains, False
         return new_domains, True
 
     # ──────────────────────────────────────────────────────
     # Tiện ích
     # ──────────────────────────────────────────────────────
     @staticmethod
-    def _get_peers(row: int, col: int) -> list[tuple[int, int]]:
-        """Trả về tất cả ô cùng hàng, cột, box với (row, col), loại bản thân."""
-        peers: set[tuple[int, int]] = set()
-        # Hàng
+    def _get_peers(row, col):
+        peers = set()
         peers.update((row, c) for c in range(SIZE) if c != col)
-        # Cột
         peers.update((r, col) for r in range(SIZE) if r != row)
-        # Box
         br, bc = (row // BOX) * BOX, (col // BOX) * BOX
         peers.update(
             (br + dr, bc + dc)
@@ -325,9 +250,6 @@ class SudokuSolver(BaseSolver):
         )
         return list(peers)
 
-    # ──────────────────────────────────────────────────────
-    # In bảng (debug / demo)
-    # ──────────────────────────────────────────────────────
     @staticmethod
     def print_board(board: list[list[int]], title: str = "") -> None:
         if title:
